@@ -1,0 +1,35 @@
+# GitHub Actions workflow: tells GitHub how and when to run cej_watch.py.
+# This file must live at .github/workflows/cej.yml in your repository.
+
+# The name shown in the Actions tab.
+name: CEJ watcher
+
+# "on" says WHEN the workflow runs.
+on:
+  # Adds a "Run workflow" button in the Actions tab so you can start it by hand.
+  # In step 4 we'll add a schedule here so it also runs automatically.
+  workflow_dispatch:
+
+# "jobs" says WHAT to do. We have one job, called "check".
+jobs:
+  check:
+    # GitHub lends us a fresh Linux computer for each run.
+    runs-on: ubuntu-latest
+
+    # The steps run in order, top to bottom.
+    steps:
+      # 1. Copy the files from your repository onto that computer.
+      - uses: actions/checkout@v4
+
+      # 2. Install Python.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # 3. Install the two libraries the script needs.
+      - name: Install libraries
+        run: pip install requests beautifulsoup4
+
+      # 4. Run the script. Its printed output appears in the Actions log.
+      - name: Check CEJ listings
+        run: python cej_watch.py
