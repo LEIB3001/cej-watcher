@@ -82,8 +82,25 @@ BASE = "https://udlejning.cej.dk"
 LIST_URL = BASE + "/find-bolig/overblik"
 
 # Some websites refuse requests that don't look like they come from a normal
-# web browser. This "User-Agent" header makes our request look like one.
-HEADERS = {"User-Agent": "Mozilla/5.0"}
+# web browser. These "headers" are what a real Chrome browser sends along
+# with every request, so our request looks like one.
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "da-DK,da;q=0.9,en;q=0.8",
+}
+
+# If the site refuses us, try again this many times, waiting a bit longer
+# each time (in seconds).
+RETRY_WAITS = [10, 30]
+
+# One shared "session" works like one browser tab: it keeps any cookies the
+# site hands out between requests, just like a browser would.
+session = requests.Session()
+session.headers.update(HEADERS)
 
 # The listings are split over several pages. We'll never need more than this.
 MAX_PAGES = 5
@@ -124,6 +141,40 @@ def parse_number(text):
     """
     digits = re.search(r"[\d.]+", text)
     return int(digits.group(0).replace(".", "")) if digits else None
+
+
+def get_page(url, params=None):
+    """
+    Download one web page, trying again if the site refuses us.
+
+    Websites answer every request with a status code: 200 means OK,
+    429 means "Too Many Requests" (the site wants us to slow down or thinks
+    we're a robot), 403 means "Forbidden". If we get anything other than
+    200, we wait and try again. If it still fails, we print details that
+    help work out why, then stop.
+    """
+    for attempt, wait in enumerate([0] + RETRY_WAITS, start=1):
+        if wait:
+            print(f"  ...waiting {wait} seconds before trying again")
+            time.sleep(wait)
+
+        # timeout=20: give up after 20 seconds if the site doesn't answer.
+        response = session.get(url, params=params, timeout=20)
+        if response.status_code == 200:
+            return response
+        print(f"  Attempt {attempt}: the site answered {response.status_code} for {response.url}")
+
+    # Still refused after all attempts: print what the site told us.
+    print("\n===== DIAGNOSTICS (please paste this to Claude) =====")
+    print("Status code:", response.status_code)
+    for name in ["server", "retry-after", "x-vercel-mitigated", "x-vercel-id",
+                 "cf-ray", "content-type"]:
+        if name in response.headers:
+            print(f"{name}: {response.headers[name]}")
+    print("First part of the page:")
+    print(response.text[:800])
+    print("===== end =====\n")
+    response.raise_for_status()  # stop the script with the error
 
 
 def format_kr(amount):
@@ -255,14 +306,7 @@ def fetch_listings():
     listings = {}  # apartments found so far, stored by ID so none count twice
 
     for page in range(1, MAX_PAGES + 1):
-        # Download one page. timeout=20: give up after 20 seconds if the
-        # site doesn't answer, instead of waiting forever.
-        response = requests.get(
-            LIST_URL, params={"page": page}, headers=HEADERS, timeout=20
-        )
-        # If the site returned an error, stop with a clear message.
-        response.raise_for_status()
-
+        response = get_page(LIST_URL, params={"page": page})
         soup = BeautifulSoup(response.text, "html.parser")
 
         # Every apartment is a link whose address contains "/boliger/".
@@ -334,8 +378,7 @@ def fetch_details(entry, debug=False):
     """
     Open one apartment's own page and add the details the list page lacks.
     """
-    response = requests.get(entry["url"], headers=HEADERS, timeout=20)
-    response.raise_for_status()
+    response = get_page(entry["url"])
     soup = BeautifulSoup(response.text, "html.parser")
 
     # All the page's text, one item per line, without empty lines.
